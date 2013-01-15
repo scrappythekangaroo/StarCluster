@@ -93,17 +93,21 @@ class SGEStats(object):
         'qsub -t 1-20:1' makes 20 jobs. self.jobs needs to represent that it is
         20 jobs instead of just 1.
         """
-        sz_range = hash['tasks']
-        dashpos = sz_range.find('-')
-        colpos = sz_range.find(':')
-        start = int(sz_range[0:dashpos])
-        fin = int(sz_range[dashpos + 1:colpos])
-        gran = int(sz_range[colpos + 1:len(sz_range)])
-        log.debug("start = %d, fin = %d, granularity = %d, sz_range = %s" %
-                  (start, fin, gran, sz_range))
-        num_jobs = (fin - start) / gran
-        log.debug("This job expands to %d tasks" % num_jobs)
-        self.jobs.extend([hash] * num_jobs)
+        sz_ranges = hash['tasks'].split(',')
+        for sz_range in sz_ranges:
+            if sz_range.find('-') > 0:
+                dashpos = sz_range.find('-')
+                colpos = sz_range.find(':')
+                start = int(sz_range[0:dashpos])
+                fin = int(sz_range[dashpos + 1:colpos])
+                gran = int(sz_range[colpos + 1:len(sz_range)])
+                log.debug("start = %d, fin = %d, granularity = %d, sz_range = %s" %
+                          (start, fin, gran, sz_range))
+                num_jobs = (fin - start) / gran
+                log.debug("This job expands to %d tasks" % num_jobs)
+                self.jobs.extend([hash] * num_jobs)
+            else:
+                self.jobs.extend([hash])
 
     def qacct_to_datetime_tuple(self, qacct):
         """
