@@ -183,7 +183,7 @@ class SGEStats(object):
         """
         queued = []
         for j in self.jobs:
-            if j['job_state'] == u'pending':
+            if j['state'] == u'qw':
                 queued.append(j)
         return queued
 
@@ -227,7 +227,7 @@ class SGEStats(object):
         This returns the age of the oldest job in the queue
         """
         for j in self.jobs:
-            if 'JB_submission_time' in j:
+            if 'JB_submission_time' in j and j['state'] == u'qw':
                 st = j['JB_submission_time']
                 dt = utils.iso_to_datetime_tuple(st)
                 return dt
