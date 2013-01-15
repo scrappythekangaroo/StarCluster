@@ -568,11 +568,12 @@ class SGELoadBalancer(LoadBalancer):
             log.info("Writing stats to file: %s" % self.stats_file)
         if self.plot_stats:
             log.info("Plotting stats to directory: %s" % self.plot_output_dir)
-        while(self._keep_polling):
+        while self._keep_polling:
             if not cluster.is_cluster_up():
                 log.info("Waiting for all nodes to come up...")
                 time.sleep(self.polling_interval)
                 continue
+
             self.get_stats()
             log.info("Execution hosts: %d" % len(self.stat.hosts), extra=raw)
             log.info("Queued jobs: %d" % len(self.stat.get_queued_jobs()),
@@ -589,9 +590,22 @@ class SGELoadBalancer(LoadBalancer):
                      self.__last_cluster_mod_time.strftime("%Y-%m-%d %X"),
                      extra=dict(__raw__=True))
             #evaluate if nodes need to be added
-            self._eval_add_node()
+
+            try:
+                self._eval_add_node()
+            except Exception as e:
+                log.error("Exception on addining node with load balancer")
+                log.error(traceback.format_exc())
+                raise e
+
             #evaluate if nodes need to be removed
-            self._eval_remove_node()
+            try:
+                self._eval_remove_node()
+            except Exception as e:
+                log.error("Exception on removing node with load balancer")
+                print traceback.format_exc()
+                raise e
+
             if self.dump_stats or self.plot_stats:
                 self.stat.write_stats_to_csv(self.stats_file)
             #call the visualizer
