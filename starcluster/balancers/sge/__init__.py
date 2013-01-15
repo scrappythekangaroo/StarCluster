@@ -556,11 +556,17 @@ class SGELoadBalancer(LoadBalancer):
         representation of the past few hours, to feed to qacct to
         limit the dataset qacct returns.
         """
-        if self.stat.is_jobstats_empty():
+        if self.stat.max_job_id == 0:
             log.info("Loading full job history")
             temp_lookback_window = self.lookback_window * 60 * 60
+        elif self.stat.is_jobstats_empty():
+            log.info("Extending job history lookback")
+            self.lookback_window += 1
+            temp_lookback_window = self.lookback_window * 60 * 60
         else:
-            temp_lookback_window = self.polling_interval
+            log.info("Refreshing job history")
+            #temp_lookback_window = self.polling_interval
+            temp_lookback_window = self.lookback_window * 60 * 60
         log.debug("getting past %d seconds worth of job history" %
                   temp_lookback_window)
         now = now - datetime.timedelta(seconds=temp_lookback_window + 1)
@@ -571,12 +577,19 @@ class SGELoadBalancer(LoadBalancer):
         master = self._cluster.master_node
         now = self.get_remote_time()
         qatime = self.get_qatime(now)
+
         qacct_cmd = 'qacct -j -b ' + qatime
         qstat_cmd = 'qstat -u \* -xml'
         qhostxml = '\n'.join(master.ssh.execute('qhost -xml'))
         qstatxml = '\n'.join(master.ssh.execute(qstat_cmd))
         qacct = '\n'.join(master.ssh.execute(qacct_cmd))
-        stats = SGEStats()
+
+        # update or load new stats
+        if not hasattr(self,'stat'):
+            stats = SGEStats()
+        else:
+            stats = self.stat
+
         stats.parse_qhost(qhostxml)
         stats.parse_qstat(qstatxml, queues=["all.q", ""])
         stats.parse_qacct(qacct, now)
