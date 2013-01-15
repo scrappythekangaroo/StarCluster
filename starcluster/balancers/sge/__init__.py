@@ -2,6 +2,8 @@ import os
 import time
 import datetime
 import xml.dom.minidom
+import re
+import traceback
 
 from starcluster import utils
 from starcluster import static
@@ -19,13 +21,13 @@ class SGEStats(object):
     """
     SunGridEngine stats parser
     """
-    jobstat_cachesize = 200
+    jobstat_cachesize = 2000
     hosts = []
     jobs = []
     jobstats = jobstat_cachesize * [None]
     max_job_id = 0
     _default_fields = ["JB_job_number", "state", "JB_submission_time",
-                       "queue_name", "slots", "tasks"]
+                       "queue_name", "slots", "tasks","JAT_start_time","JB_name"]
 
     @property
     def first_job_id(self):
@@ -226,6 +228,85 @@ class SGEStats(object):
                 dt = utils.iso_to_datetime_tuple(st)
                 return dt
         #todo: throw a "no queued jobs" exception
+
+    def latest_running_job_age(self):
+        """
+        This returns the age of last job to enter running state on the queue
+        """
+
+        dt = None
+        for j in self.jobs:
+            #if 'JAT_start_time' in j and (j['state'] == u'r' | j['state'] == u'Rr'):
+            if 'JAT_start_time' in j and re.match(r'r|Rr',j['state']):
+                #print j
+                st = j['JAT_start_time']
+                ndt = utils.iso_to_datetime_tuple(st)
+                if not dt:
+                    dt = ndt
+                elif  ndt > dt:
+                    dt = ndt
+
+        return dt
+
+        #todo: throw a "no queued jobs" exception
+
+    def calc_running_exec_time(self, now, first_n_jobs = None):
+        """
+        first_n_jobs gives the execution time for the jobs scheduled to finish soonest
+        """
+
+        jobs = filter(lambda x: re.match(r'r|Rr',x['state']), self.jobs)
+
+        jobnames = map(lambda x: x['JB_name'],jobs)
+
+        expected_job_time = {}
+        for j in jobnames:
+            expected_job_time[j] = 1
+        for j in jobnames:
+            expected_job_time[j] = self.avg_exec_time(j)
+
+        remaining_job_time = []
+        for j in jobs:
+            temp_time = expected_job_time[j['JB_name']] - (now - utils.iso_to_datetime_tuple(j['JAT_start_time'])).seconds
+            remaining_job_time.append(temp_time if temp_time > 0 else 0)
+
+        if first_n_jobs:
+            exec_time = sum(sorted(remaining_job_time)[0:first_n_jobs])
+        else:
+            exec_time = sum(sorted(remaining_job_time))
+
+        return exec_time
+
+    def calc_queue_exec_time(self, state = None):
+        jobs = filter(lambda x: re.match(state,x['state']) if state else True, self.jobs)
+
+        jobnames = map(lambda x: x['JB_name'],jobs)
+
+        unique_jobnames = {}
+        for j in jobnames:
+            unique_jobnames[j] = 1
+        unique_jobnames=unique_jobnames.keys()
+
+        exec_time = 0
+        for j in unique_jobnames:
+            exec_time += jobnames.count(j) * self.avg_exec_time(j)
+
+        return exec_time
+
+    def avg_exec_time(self, jobname = None):
+        stats = self.jobstats
+
+        if jobname:
+            stats = filter(lambda x: x['jobname'] == jobname if x else False, stats)
+
+        dur = 0
+        for s in stats:
+            dur += (s['end'] - s['start']).seconds
+
+        dur /= len(stats) if stats else 1
+
+        return dur
+
 
     def is_node_working(self, node):
         """
@@ -639,6 +720,12 @@ class SGELoadBalancer(LoadBalancer):
         add a new node to the cluster or not. It isn't able to add a node yet.
         TODO: See if the recent jobs have taken more than 5 minutes (how
         long it takes to start an instance)
+
+        policy should follow rules:
+            * if no new jobs have started in last X minutes then add new node (i.e. all current jobs are blocking)
+            * if current queue is estimated to take more than X minutes to complete based
+              on the job history (taking into account current running time)
+            * we assume it takes 300 seconds for a new node to come up
         """
         if len(self.stat.hosts) >= self.max_nodes:
             log.info("Not adding nodes: already at or above maximum (%d)" %
@@ -648,29 +735,58 @@ class SGELoadBalancer(LoadBalancer):
         qlen = len(self.stat.get_queued_jobs())
         sph = self.stat.slots_per_host()
         ts = self.stat.count_total_slots()
+        tts = 300 # time-to-start new node
+
         num_exec_hosts = len(self.stat.hosts)
         #calculate estimated time to completion
-        ettc = 0
-        if num_exec_hosts > 0:
-            #calculate job duration
-            avg_duration = self.stat.avg_job_duration()
-            ettc = avg_duration * qlen / num_exec_hosts
-        if qlen > ts:
+        if qlen > 0:
             if not self.has_cluster_stabilized():
                 return
-            #there are more jobs queued than will be consumed with one
-            #cycle of job processing from all nodes
-            oldest_job_dt = self.stat.oldest_queued_job_age()
+
             now = self.get_remote_time()
-            age_delta = now - oldest_job_dt
-            if age_delta.seconds > self.longest_allowed_queue_time:
-                log.info("A job has been waiting for %d sec, longer than "
-                         "max %d" % (age_delta.seconds,
-                                     self.longest_allowed_queue_time))
-                need_to_add = qlen / sph if sph != 0 else 1
-                if 0 < ettc < 600 and not self.stat.on_first_job():
-                    log.warn("There is a possibility that the job queue is"
-                             " shorter than 10 minutes in duration")
+
+            # TODO: momentary movement of jobs into the queue can cause
+            # TODO: supurious job launching here, we need some kind of
+            # TODO: failsafe to make sure this is only triggered in sensible
+            # TODO: circumstances -- disabled for the moment
+            # if jobs are not moving quickly enough into running state
+            # we need to add more nodes, sometimes latest running job can be now
+            #latest_running_job_dt = self.stat.latest_running_job_age()
+            #age_delta = now - latest_running_job_dt if latest_running_job_dt else now
+            #log.info("Last job launched:", str(datetime.timedelta(seconds=age_delta.seconds)))
+            #if age_delta.seconds > self.longest_allowed_queue_time:
+            #    log.info("The queue has been running for %s sec without change, longer than "
+            #             "max %s" % (datetime.timedelta(seconds=age_delta.seconds),
+            #                         datetime.timedelta(seconds=self.longest_allowed_queue_time)))
+            #    need_to_add = 1
+
+            ettcr = self.stat.calc_running_exec_time(now,qlen if qlen < ts else None)
+            ettcqw = self.stat.calc_queue_exec_time(state=r'qw|Rq')
+            ettq = ettcr / min(qlen,ts) + ettcqw / min(qlen,ts) * (0 if qlen < ts else qlen-ts)/qlen
+
+            log.info("Expected queue time: %s"
+                     % (datetime.timedelta(seconds=ettq)))
+
+            # Predict the time to complete queued tasks given hypothesised number of nodes
+            if ettq > self.longest_allowed_queue_time:
+                log.info("Expected queued time %s exceeds longest queue time limit %s"
+                         % (datetime.timedelta(seconds=ettq),
+                            datetime.timedelta(seconds=self.longest_allowed_queue_time)))
+
+                # TODO: some horrible code here that simply uses sampling to determine how many nodes to add
+                # TODO: this should be implemented as a simply equation but for the moment
+                for hyp_to_add in range(1,10):
+                    new_expected_queue_time = min(ettcr / min(qlen,ts), tts) + ettcqw / min(qlen,ts+hyp_to_add*sph) * (0 if qlen < ts + hyp_to_add*sph else qlen-ts-hyp_to_add*sph)/qlen
+
+                    log.info("  Expected queued time with scaling (+%d): %s"\
+                             % (hyp_to_add,datetime.timedelta(seconds=new_expected_queue_time)))
+
+                    if new_expected_queue_time < self.longest_allowed_queue_time or qlen < ts+hyp_to_add*sph:
+                        #log.info("  Found new nodes to add: ", hyp_to_add)
+                        break
+
+                need_to_add = hyp_to_add
+
         max_add = self.max_nodes - len(self._cluster.running_nodes)
         need_to_add = min(self.add_nodes_per_iteration, need_to_add, max_add)
         if need_to_add > 0:
