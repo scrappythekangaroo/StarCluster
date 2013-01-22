@@ -682,6 +682,35 @@ class Node(object):
                 self.ssh.makedirs(path)
             self.ssh.execute('mount %s' % path)
 
+    def unmount_nfs_shares(self, server_node, remote_paths):
+        """
+        Unmount each path in remote_paths from the remote server_node
+
+        server_node - remote server node that is sharing the remote_paths
+        remote_paths - list of remote paths to umount from server_node
+        """
+        mount_map = self.get_mount_map()
+        mount_paths = []
+        for path in remote_paths:
+            network_device = "%s:%s" % (server_node.alias, path)
+            if network_device in mount_map:
+                mount_path, typ, options = mount_map.get(network_device)
+                log.debug('nfs share %s currently mounted to %s on ' %
+                          (network_device, mount_path))
+                mount_paths.append(path)
+            else:
+                log.debug('nfs share %s not currently mounted on '
+                          'node %s, skipping...' %
+                          network_device, self.alias)
+        remote_paths = mount_paths
+        remote_paths_regex = '|'.join(map(lambda x: x.center(len(x) + 2),
+            remote_paths))
+
+        self.ssh.remove_lines_from_file('/etc/fstab', remote_paths_regex)
+
+        for path in remote_paths:
+            self.ssh.execute('umount -fl %s' % path)
+
     def get_mount_map(self):
         mount_map = {}
         mount_lines = self.ssh.execute('mount')
@@ -732,6 +761,14 @@ class Node(object):
         if not self.ssh.path_exists(path):
             self.ssh.makedirs(path)
         self.ssh.execute('mount %s' % path)
+
+    def unmount_device(self, device, path):
+        """
+        Unmount device at path
+        """
+        self.ssh.remove_lines_from_file('/etc/fstab',
+            path.center(len(path) + 2))
+        self.ssh.execute('umount -fl %s' % path)
 
     def add_to_etc_hosts(self, nodes):
         """
