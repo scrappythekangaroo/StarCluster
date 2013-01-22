@@ -2,11 +2,22 @@ from starcluster import clustersetup
 from starcluster.templates import sge
 from starcluster.logger import log
 
+from starcluster.balancers.sge import SGEStats
+import re
 
 class SGEPlugin(clustersetup.DefaultClusterSetup):
 
-    def __init__(self, master_is_exec_host=True, **kwargs):
+    def __init__(self, master_is_exec_host=True, scheduler_interval='0:0:15', master_slots=None, node_slots = None, **kwargs):
         self.master_is_exec_host = str(master_is_exec_host).lower() == "true"
+
+        self._scheduler_interval = scheduler_interval
+        if master_slots:
+            self._master_slots = int(master_slots)
+        if node_slots:
+            self._node_slots = int(node_slots)
+        else:
+            self._node_slots = self._master_slots
+
         super(SGEPlugin, self).__init__(**kwargs)
 
     def _add_sge_submit_host(self, node):
@@ -69,6 +80,21 @@ class SGEPlugin(clustersetup.DefaultClusterSetup):
         inst_sge += '-noremote -auto ./ec2_sge.conf'
         node.ssh.execute(inst_sge, silent=True, only_printable=True)
 
+    def _set_scheduler_interval(self, interval):
+        log.info('Modifying scheduler interval')
+        master=self._master
+        cmd = "qconf -ssconf | sed s/0:0:15/" + self._scheduler_interval + "/ > /tmp/sched.conf.txt;"
+        cmd += "qconf -Msconf /tmp/sched.conf.txt"
+        master.ssh.execute(cmd, log_output=True,source_profile=True,raise_on_failure=False)
+
+    def _set_number_slots(self, master_slots, node_slots):
+        log.info('Modifying number of master & node slots')
+        master=self._master
+        cmd = "qconf -sq all.q | sed s/=[0-9]*]/=" + str(node_slots) +"]/g > /tmp/queue.conf.txt;"
+        #cmd += "qconf -Mq /tmp/queue.conf.txt;"
+        cmd += "cat /tmp/queue.conf.txt | sed s/master=[0-9]*]/master=" + str(master_slots) +"]/ > /tmp/queue.conf2.txt;"
+        cmd += "qconf -Mq /tmp/queue.conf2.txt;"
+        master.ssh.execute(cmd, log_output=True,source_profile=True,raise_on_failure=False)
     def _setup_sge(self):
         """
         Install Sun Grid Engine with a default parallel
@@ -132,6 +158,9 @@ class SGEPlugin(clustersetup.DefaultClusterSetup):
         self._volumes = volumes
         self._setup_sge()
 
+        self._set_scheduler_interval(self._scheduler_interval)
+        if self._master_slots:
+            self._set_number_slots(self._master_slots, self._node_slots)
     def on_add_node(self, node, nodes, master, user, user_shell, volumes):
         self._nodes = nodes
         self._master = master
@@ -146,6 +175,8 @@ class SGEPlugin(clustersetup.DefaultClusterSetup):
         self._add_to_sge(node)
         self._create_sge_pe()
 
+        if self._master_slots:
+            self._set_number_slots(self._master_slots, self._node_slots)
     def on_remove_node(self, node, nodes, master, user, user_shell, volumes):
         self._nodes = nodes
         self._master = master
