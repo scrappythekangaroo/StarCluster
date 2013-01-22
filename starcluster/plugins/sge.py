@@ -95,6 +95,49 @@ class SGEPlugin(clustersetup.DefaultClusterSetup):
         cmd += "cat /tmp/queue.conf.txt | sed s/master=[0-9]*]/master=" + str(master_slots) +"]/ > /tmp/queue.conf2.txt;"
         cmd += "qconf -Mq /tmp/queue.conf2.txt;"
         master.ssh.execute(cmd, log_output=True,source_profile=True,raise_on_failure=False)
+
+    def _get_number_of_slots(self,node):
+        """
+        get number of slots for the given node by parsing qconf -sq all.q
+        """
+
+        qconf_output = '\n'.join(self._master.ssh.execute('qconf -sq all.q'))
+        slots =  int(re.search("%s=[0-9]+" % node.alias,qconf_output).group(0).split('=')[1])
+
+        return slots
+
+    def _set_fill_up_host(self):
+        """
+        normally it's np_load_avg, this needs to be run per execution host
+        """
+
+        log.info('Setting scheduler to FILL UP HOST')
+        master = self._master
+        nodes = self.nodes
+
+        print [master] + nodes
+        for node in [master] + nodes:
+            slots = self._get_number_of_slots(node)
+
+            qconf_str = """
+hostname              %s
+load_scaling          NONE
+complex_values        slots=%s
+user_lists            NONE
+xuser_lists           NONE
+projects              NONE
+xprojects             NONE
+usage_scaling         NONE
+report_variables      NONE
+""" % (node.alias, slots)
+
+            cmd = 'echo "%s" > /tmp/host.conf.txt;' % qconf_str
+            cmd += 'qconf -Me /tmp/host.conf.txt;'
+            node.ssh.execute(cmd, log_output=False,source_profile=True,raise_on_failure=False)
+
+        cmd = 'qconf -ssconf | sed "s/load_formula.*/load_formula  slots/" > /tmp/sched.conf.txt;'
+        cmd += 'qconf -Msconf /tmp/sched.conf.txt;'
+        master.ssh.execute(cmd, log_output=False,source_profile=True,raise_on_failure=False)
     def _setup_sge(self):
         """
         Install Sun Grid Engine with a default parallel
@@ -161,6 +204,7 @@ class SGEPlugin(clustersetup.DefaultClusterSetup):
         self._set_scheduler_interval(self._scheduler_interval)
         if self._master_slots:
             self._set_number_slots(self._master_slots, self._node_slots)
+        self._set_fill_up_host()
     def on_add_node(self, node, nodes, master, user, user_shell, volumes):
         self._nodes = nodes
         self._master = master
@@ -177,6 +221,7 @@ class SGEPlugin(clustersetup.DefaultClusterSetup):
 
         if self._master_slots:
             self._set_number_slots(self._master_slots, self._node_slots)
+        self._set_fill_up_host()
     def on_remove_node(self, node, nodes, master, user, user_shell, volumes):
         self._nodes = nodes
         self._master = master
