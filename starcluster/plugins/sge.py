@@ -215,6 +215,37 @@ report_variables      NONE
         self.pool.wait(numtasks=len(self.nodes))
         self._create_sge_pe()
 
+
+    def _resubmit_node_jobs(self, node):
+        log.info('Resubmitting any running jobs')
+        master = self._master
+        stats = SGEStats()
+        qstat_cmd = "qstat  -s r -u asrproc -q [ all.q@%s ] -xml" % node._alias
+        qstatxml = '\n'.join(master.ssh.execute(qstat_cmd, log_output=False,
+            source_profile=True,
+            raise_on_failure=True))
+
+        if qstatxml:
+            qstat =  stats.parse_qstat(qstatxml, queues=["all.q", ""])
+
+            jobs = {}
+            for j in qstat:
+                jobs[j['JB_job_number']] = 1
+            jobs = jobs.keys()
+
+            for j in jobs:
+                qalter_cmd = 'qalter -r y %s' % j
+                master.ssh.execute(qalter_cmd, log_output=False, source_profile=True, raise_on_failure=True)
+
+            for j in qstat:
+                # resubmit those jobs
+                if 'tasks' in j:
+                    qmod_cmd = "qmod -r %s.%s" % (j["JB_job_number"],j["tasks"])
+                    master.ssh.execute(qmod_cmd, log_output=False, source_profile=True, raise_on_failure=True)
+                else:
+                    qmod_cmd = "qmod -r %s" % (j["JB_job_number"])
+                    master.ssh.execute(qmod_cmd, log_output=False, source_profile=True, raise_on_failure=True)
+
     def _remove_from_sge(self, node):
         master = self._master
         master.ssh.execute('qconf -dattr hostgroup hostlist %s @allhosts' %
@@ -268,3 +299,4 @@ report_variables      NONE
         log.info("Removing %s from SGE" % node.alias)
         self._remove_from_sge(node)
         self._remove_nfs_exports(node)
+        self._resubmit_node_jobs(node)
