@@ -138,6 +138,43 @@ report_variables      NONE
         cmd = 'qconf -ssconf | sed "s/load_formula.*/load_formula  slots/" > /tmp/sched.conf.txt;'
         cmd += 'qconf -Msconf /tmp/sched.conf.txt;'
         master.ssh.execute(cmd, log_output=False,source_profile=True,raise_on_failure=False)
+
+    def _clear_error_states(self):
+        """
+        Used do clear up error states on jobs that may occur for some reason or other
+        """
+
+        log.info('Clearing any error states on queue')
+        master=self._master
+        qstat_cmd = 'qstat -u \* -xml'
+        qstatxml = '\n'.join(master.ssh.execute(qstat_cmd))
+        stats = SGEStats()
+        qstat =  stats.parse_qstat(qstatxml, queues=["all.q", ""])
+
+        log.info("%s" % qstat)
+        Eqw = filter(lambda x: re.match(r'^Eqw',x.get('state','')),qstat)
+        log.info("%s" % Eqw)
+        if Eqw:
+            jobs = {}
+            for j in Eqw:
+                log.info("---> %s" % j)
+                jobs[(j['JB_job_number'],j.get('tasks',None))] = 1
+            jobs = jobs.keys()
+            log.info("%s" % jobs)
+            for j in jobs:
+                log.info("------> %s" % str(j))
+                if j[1]:
+                    cmd = 'qmod -cj %s -t %s' % (j[0],j[1])
+                else:
+                    cmd = 'qmod -cj %s' % j[0]
+                log.info("cmd: %s" % cmd)
+
+                master.ssh.execute(cmd)
+
+        # TODO: for some reason re-adding a node can result in that node being disabled, this is a quick fix
+        cmd = 'qmod -e all.q'
+        master.ssh.execute(cmd)
+
     def _setup_sge(self):
         """
         Install Sun Grid Engine with a default parallel
