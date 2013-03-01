@@ -109,7 +109,7 @@ class ThreadPool(workerpool.WorkerPool):
         return results
 
     def map(self, fn, *seq):
-        return self.mapWithJobId(fn, None, *seq)
+        return self.mapWithJobId(fn, None, seq)
 
     def mapWithJobId(self, fn, jobIdFn, *seq):
         if self._results_queue.qsize() > 0:
