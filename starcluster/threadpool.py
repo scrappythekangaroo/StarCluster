@@ -109,11 +109,14 @@ class ThreadPool(workerpool.WorkerPool):
         return results
 
     def map(self, fn, *seq):
+        return self.mapWithJobId(fn, None, *seq)
+
+    def mapWithJobId(self, fn, jobIdFn, *seq):
         if self._results_queue.qsize() > 0:
             self.get_results()
         args = zip(*seq)
         for seq in args:
-            self.simple_job(fn, seq)
+            self.simple_job(fn, seq, jobid=jobIdFn(seq))
         return self.wait(numtasks=len(args))
 
     def store_exception(self, e):

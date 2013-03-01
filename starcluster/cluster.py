@@ -765,6 +765,12 @@ class Cluster(object):
                     self._nodes.append(n)
         self._nodes.sort(key=lambda n: n.alias)
         log.debug('returning self._nodes = %s' % self._nodes)
+
+        #FMLHHHH start ---
+        aliases = [n.alias for n in self._nodes]
+        if len(aliases) != len(set(aliases)):
+            raise Exception("FMLHHHH: bogus get nodes detected!")
+        #FMLHHHH end -----
         return self._nodes
 
     def get_nodes_or_raise(self):
@@ -1374,6 +1380,10 @@ class Cluster(object):
                   "reboot_interval": reboot_interval,
                   "n_reboot_restart": n_reboot_restart}
         self.pool.map(lambda n: n.wait(**params), nodes)
+        self.pool.mapWithJobId(
+            lambda n: n.wait(**params),
+            nodes,
+            lambda n: n.alias)
 
     @print_timing("Waiting for cluster to come up")
     def wait_for_cluster(self, msg="Waiting for cluster to come up...",
