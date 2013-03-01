@@ -115,8 +115,12 @@ class ThreadPool(workerpool.WorkerPool):
         if self._results_queue.qsize() > 0:
             self.get_results()
         args = zip(*seq)
-        for seq in args:
-            self.simple_job(fn, seq, jobid=jobIdFn(seq))
+        if jobIdFn:
+            for seq in args:
+                self.simple_job(fn, seq, jobid=jobIdFn(seq))
+        else:
+            for seq in args:
+                self.simple_job(fn, seq)
         return self.wait(numtasks=len(args))
 
     def store_exception(self, e):
