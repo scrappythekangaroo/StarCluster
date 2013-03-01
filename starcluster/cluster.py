@@ -1379,7 +1379,6 @@ class Cluster(object):
         params = {"interval": self.refresh_interval,
                   "reboot_interval": reboot_interval,
                   "n_reboot_restart": n_reboot_restart}
-        self.pool.map(lambda n: n.wait(**params), nodes)
         self.pool.mapWithJobId(
             lambda n: n.wait(**params),
             lambda n: n.alias,
