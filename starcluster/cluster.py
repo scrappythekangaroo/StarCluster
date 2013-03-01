@@ -1382,8 +1382,8 @@ class Cluster(object):
         self.pool.map(lambda n: n.wait(**params), nodes)
         self.pool.mapWithJobId(
             lambda n: n.wait(**params),
-            nodes,
-            lambda n: n.alias)
+            lambda n: n.alias,
+            nodes)
 
     @print_timing("Waiting for cluster to come up")
     def wait_for_cluster(self, msg="Waiting for cluster to come up...",
