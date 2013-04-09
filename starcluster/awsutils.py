@@ -305,12 +305,6 @@ class EasyEC2(EasyAWS):
         """
         Returns placement group with name if it exists otherwise returns None
         """
-        region = self.conn.region.name
-        if not region in static.CLUSTER_REGIONS:
-            region_list = ', '.join(static.CLUSTER_REGIONS)
-            log.debug("region %s not in CLUSTER_REGIONS (%s)" % (region,
-                                                                 region_list))
-            return
         try:
             return self.get_placement_group(name)
         except exception.PlacementGroupDoesNotExist:
@@ -331,10 +325,32 @@ class EasyEC2(EasyAWS):
                           min_count=1, max_count=1, count=1, key_name=None,
                           security_groups=None, launch_group=None,
                           availability_zone_group=None, placement=None,
-                          user_data=None, placement_group=None):
+                          user_data=None, placement_group=None,
+                          block_device_map=None):
         """
         Convenience method for running spot or flat-rate instances
         """
+        if not block_device_map:
+            img = self.get_image(image_id)
+            img_is_hvm = img.virtualization_type == 'hvm'
+            device_fmt = '/dev/sd%s1'
+            if img_is_hvm and instance_type in static.HVM_TYPES:
+                device_fmt = '/dev/sd%s'
+            bdmap = self.create_block_device_map(add_ephemeral_drives=True,
+                                                 device_fmt=device_fmt)
+            # prune any ephemeral drives defined in the AMI's block device map
+            # from the runtime block device map
+            for dev in img.block_device_mapping:
+                bdt = img.block_device_mapping.get(dev)
+                if bdt.ephemeral_name:
+                    ephnum = int(bdt.ephemeral_name.split('ephemeral')[1])
+                    drive_letter = chr(ord('b') + ephnum)
+                    device = device_fmt % drive_letter
+                    log.debug("Removing ephemeral drive %s from runtime block "
+                              "device mapping (already mapped by AMI: %s)" %
+                              (device, img.id))
+                    bdmap.pop(device)
+            block_device_map = bdmap
         if price:
             return self.request_spot_instances(
                 price, image_id, instance_type=instance_type,
@@ -342,31 +358,34 @@ class EasyEC2(EasyAWS):
                 security_groups=security_groups,
                 availability_zone_group=availability_zone_group,
                 placement=placement, placement_group=placement_group,
-                user_data=user_data)
+                user_data=user_data, block_device_map=block_device_map)
         else:
             return self.run_instances(
                 image_id, instance_type=instance_type,
                 min_count=min_count, max_count=max_count,
                 key_name=key_name, security_groups=security_groups,
                 placement=placement, user_data=user_data,
-                placement_group=placement_group)
+                placement_group=placement_group,
+                block_device_map=block_device_map)
 
     def request_spot_instances(self, price, image_id, instance_type='m1.small',
                                count=1, launch_group=None, key_name=None,
                                availability_zone_group=None,
                                security_groups=None, placement=None,
-                               placement_group=None, user_data=None):
+                               placement_group=None, user_data=None,
+                               block_device_map=None):
         return self.conn.request_spot_instances(
             price, image_id, instance_type=instance_type, count=count,
             launch_group=launch_group, key_name=key_name,
             security_groups=security_groups,
             availability_zone_group=availability_zone_group,
             placement=placement, placement_group=placement_group,
-            user_data=user_data)
+            user_data=user_data, block_device_map=block_device_map)
 
     def run_instances(self, image_id, instance_type='m1.small', min_count=1,
                       max_count=1, key_name=None, security_groups=None,
-                      placement=None, user_data=None, placement_group=None):
+                      placement=None, user_data=None, placement_group=None,
+                      block_device_map=None):
         return self.conn.run_instances(image_id, instance_type=instance_type,
                                        min_count=min_count,
                                        max_count=max_count,
@@ -374,7 +393,8 @@ class EasyEC2(EasyAWS):
                                        security_groups=security_groups,
                                        placement=placement,
                                        user_data=user_data,
-                                       placement_group=placement_group)
+                                       placement_group=placement_group,
+                                       block_device_map=block_device_map)
 
     def create_image(self, instance_id, name, description=None,
                      no_reboot=False):
@@ -540,7 +560,7 @@ class EasyEC2(EasyAWS):
             print 'Total: %s' % len(spots)
 
     def show_instance(self, instance):
-        id = instance.id or 'N/A'
+        instance_id = instance.id or 'N/A'
         groups = ', '.join([g.name for g in instance.groups])
         dns_name = instance.dns_name or 'N/A'
         private_dns_name = instance.private_dns_name or 'N/A'
@@ -549,12 +569,13 @@ class EasyEC2(EasyAWS):
         public_ip = instance.ip_address or 'N/A'
         zone = instance.placement or 'N/A'
         ami = instance.image_id or 'N/A'
+        virt_type = instance.virtualization_type or 'N/A'
         instance_type = instance.instance_type or 'N/A'
         keypair = instance.key_name or 'N/A'
         uptime = utils.get_elapsed_time(instance.launch_time) or 'N/A'
         if state == 'stopped':
             uptime = 'N/A'
-        print "id: %s" % id
+        print "id: %s" % instance_id
         print "dns_name: %s" % dns_name
         print "private_dns_name: %s" % private_dns_name
         if instance.reason:
@@ -565,6 +586,7 @@ class EasyEC2(EasyAWS):
         print "private_ip: %s" % private_ip
         print "zone: %s" % zone
         print "ami: %s" % ami
+        print "virtualization: %s" % virt_type
         print "type: %s" % instance_type
         print "groups: %s" % groups
         print "keypair: %s" % keypair
@@ -905,36 +927,27 @@ class EasyEC2(EasyAWS):
             log.info("Manifest migrated successfully. You can now run:\n" +
                      register_cmd + "\nto register your migrated image.")
 
-    def create_root_block_device_map(self, snapshot_id,
-                                     root_device_name='/dev/sda1',
-                                     add_ephemeral_drives=False,
-                                     ephemeral_drive_0='/dev/sdb1',
-                                     ephemeral_drive_1='/dev/sdc1',
-                                     ephemeral_drive_2='/dev/sdd1',
-                                     ephemeral_drive_3='/dev/sde1'):
+    def create_block_device_map(self, root_snapshot_id=None,
+                                root_device_name='/dev/sda1',
+                                add_ephemeral_drives=False,
+                                num_ephemeral_drives=24,
+                                device_fmt='/dev/sd%s1'):
         """
         Utility method for building a new block_device_map for a given snapshot
         id. This is useful when creating a new image from a volume snapshot.
         The returned block device map can be used with self.register_image
         """
         bmap = boto.ec2.blockdevicemapping.BlockDeviceMapping()
-        sda1 = boto.ec2.blockdevicemapping.BlockDeviceType()
-        sda1.snapshot_id = snapshot_id
-        sda1.delete_on_termination = True
-        bmap[root_device_name] = sda1
+        if root_snapshot_id:
+            sda1 = boto.ec2.blockdevicemapping.BlockDeviceType()
+            sda1.snapshot_id = root_snapshot_id
+            sda1.delete_on_termination = True
+            bmap[root_device_name] = sda1
         if add_ephemeral_drives:
-            sdb1 = boto.ec2.blockdevicemapping.BlockDeviceType()
-            sdb1.ephemeral_name = 'ephemeral0'
-            bmap[ephemeral_drive_0] = sdb1
-            sdc1 = boto.ec2.blockdevicemapping.BlockDeviceType()
-            sdc1.ephemeral_name = 'ephemeral1'
-            bmap[ephemeral_drive_1] = sdc1
-            sdd1 = boto.ec2.blockdevicemapping.BlockDeviceType()
-            sdd1.ephemeral_name = 'ephemeral2'
-            bmap[ephemeral_drive_2] = sdd1
-            sde1 = boto.ec2.blockdevicemapping.BlockDeviceType()
-            sde1.ephemeral_name = 'ephemeral3'
-            bmap[ephemeral_drive_3] = sde1
+            for i in range(num_ephemeral_drives):
+                eph = boto.ec2.blockdevicemapping.BlockDeviceType()
+                eph.ephemeral_name = 'ephemeral%d' % i
+                bmap[device_fmt % chr(ord('b') + i)] = eph
         return bmap
 
     @print_timing("Downloading image")
@@ -1216,8 +1229,13 @@ class EasyEC2(EasyAWS):
 
     def show_console_output(self, instance_id):
         instance = self.get_instance(instance_id)
-        console_output = instance.get_console_output().output
-        print ''.join([c for c in console_output if c in string.printable])
+        console_output = instance.get_console_output().output or ''
+        console_output = ''.join([c for c in console_output if c in
+                                  string.printable])
+        if console_output:
+            print console_output
+        else:
+            log.info("No console output available...")
 
 
 class EasyS3(EasyAWS):
