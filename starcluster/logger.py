@@ -2,11 +2,14 @@
 StarCluster logging module
 """
 import os
+import sys
+import glob
 import types
 import logging
 import logging.handlers
 import textwrap
-import StringIO
+#import StringIO
+import fileinput
 
 from starcluster import static
 
@@ -105,7 +108,7 @@ def get_starcluster_logger():
 
 log = get_starcluster_logger()
 console = ConsoleLogger()
-session = logging.StreamHandler(StringIO.StringIO())
+#session = logging.StreamHandler(StringIO.StringIO())
 
 
 def configure_sc_logging(use_syslog=False):
@@ -132,9 +135,9 @@ def configure_sc_logging(use_syslog=False):
     log.addHandler(rfh)
     console.setLevel(logging.INFO)
     log.addHandler(console)
-    session.setLevel(logging.DEBUG)
-    session.setFormatter(formatter)
-    log.addHandler(session)
+    #session.setLevel(logging.DEBUG)
+    #session.setFormatter(formatter)
+    #log.addHandler(session)
     syslog_device = '/dev/log'
     if use_syslog and os.path.exists(syslog_device):
         log.debug("Logging to %s" % syslog_device)
@@ -180,3 +183,21 @@ def configure_boto_logging():
     date_format = '%Y%m%d-%H:%M:%S'
     lh.setFormatter(logging.Formatter(format, date_format))
     l.addHandler(lh)
+
+def get_log_for_pid(pid):
+    """
+    Fetches the logs from the debug log file for a given StarCluster run by PID
+    """
+    found_pid = False
+    pid_str = ' PID: %s ' % pid
+    for line in fileinput.input(glob.glob(static.DEBUG_FILE + '*')):
+        if pid_str in line:
+            yield line
+            found_pid = True
+        elif found_pid and not ' PID: ' in line:
+            yield line
+        else:
+            found_pid = False
+
+def get_session_log():
+    return get_log_for_pid(static.PID)

@@ -139,25 +139,31 @@ class SGEPlugin(clustersetup.DefaultClusterSetup):
             self.pool.shutdown()
 
     def on_add_node(self, node, nodes, master, user, user_shell, volumes):
-        self._nodes = nodes
-        self._master = master
-        self._user = user
-        self._user_shell = user_shell
-        self._volumes = volumes
-        log.info("Adding %s to SGE" % node.alias)
-        self._setup_nfs(nodes=[node], export_paths=['/opt/sge6'],
-                        start_server=False)
-        self._add_sge_admin_host(node)
-        self._add_sge_submit_host(node)
-        self._add_to_sge(node)
-        self._create_sge_pe()
+        try:
+            self._nodes = nodes
+            self._master = master
+            self._user = user
+            self._user_shell = user_shell
+            self._volumes = volumes
+            log.info("Adding %s to SGE" % node.alias)
+            self._setup_nfs(nodes=[node], export_paths=['/opt/sge6'],
+                            start_server=False)
+            self._add_sge_admin_host(node)
+            self._add_sge_submit_host(node)
+            self._add_to_sge(node)
+            self._create_sge_pe()
+        finally:
+            self.pool.shutdown()
 
     def on_remove_node(self, node, nodes, master, user, user_shell, volumes):
-        self._nodes = nodes
-        self._master = master
-        self._user = user
-        self._user_shell = user_shell
-        self._volumes = volumes
-        log.info("Removing %s from SGE" % node.alias)
-        self._remove_from_sge(node)
-        self._remove_nfs_exports(node)
+        try:
+            self._nodes = nodes
+            self._master = master
+            self._user = user
+            self._user_shell = user_shell
+            self._volumes = volumes
+            log.info("Removing %s from SGE" % node.alias)
+            self._remove_from_sge(node)
+            self._remove_nfs_exports(node)
+        finally:
+            self.pool.shutdown()

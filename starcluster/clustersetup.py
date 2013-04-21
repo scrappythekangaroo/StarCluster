@@ -149,6 +149,7 @@ class DefaultClusterSetup(ClusterSetup):
         the new user to be the existing uid/gid of the dir in EBS rather than
         chowning potentially terabytes of data.
         """
+        user = user or self._user
         uid, gid = self._get_new_user_id(user)
         log.info("Creating cluster user: %s (uid: %d, gid: %d)" %
                  (user, uid, gid))
@@ -351,21 +352,47 @@ class DefaultClusterSetup(ClusterSetup):
         finally:
             self.pool.shutdown()
 
+    # changed to make this faster
     def _remove_from_etc_hosts(self, node):
         nodes = filter(lambda x: x.id != node.id, self.running_nodes)
+        master = None
+
         for n in nodes:
-            n.remove_from_etc_hosts([node])
+            #n.remove_from_etc_hosts([node])
+            if n.is_master():
+                master = n
+                break
+
+        master.remove_from_etc_hosts([node])
+        master.copy_remote_file_to_nodes('/etc/hosts', filter(lambda x: x is not master, nodes))
 
     def _remove_nfs_exports(self, node):
         self._master.stop_exporting_fs_to_nodes([node])
 
+    # changed to make this faster
     def _remove_from_known_hosts(self, node):
         nodes = filter(lambda x: x.id != node.id, self.running_nodes)
+        master = None
+
         for n in nodes:
-            n.remove_from_known_hosts('root', [node])
-            n.remove_from_known_hosts(self._user, [node])
+            #n.remove_from_known_hosts('root', [node])
+            #n.remove_from_known_hosts(self._user, [node])
+
+            if n.is_master():
+                master = n
+                break
+
+        master.remove_from_known_hosts('root', [node])
+        master.remove_from_known_hosts(self._user, [node])
+
+        targets = [posixpath.join('/root', '.ssh','known_hosts'),
+                   posixpath.join(node.getpwnam(self._user).pw_dir, '.ssh','known_hosts'),]
+
+        for target in targets:
+            master.copy_remote_file_to_nodes(target, filter(lambda x: x is not master, nodes))
 
     def on_remove_node(self, node, nodes, master, user, user_shell, volumes):
+        #try:
         self._nodes = nodes
         self._master = master
         self._user = user
@@ -378,6 +405,8 @@ class DefaultClusterSetup(ClusterSetup):
         self._remove_from_etc_hosts(node)
         log.info("Removing %s from NFS" % node.alias)
         self._remove_nfs_exports(node)
+        #finally:
+        #    self.pool.shutdown()
 
     def _create_user(self, node):
         user = self._master.getpwnam(self._user)
@@ -385,14 +414,18 @@ class DefaultClusterSetup(ClusterSetup):
         self._add_user_to_nodes(uid, gid, nodes=[node])
 
     def on_add_node(self, node, nodes, master, user, user_shell, volumes):
-        self._nodes = nodes
-        self._master = master
-        self._user = user
-        self._user_shell = user_shell
-        self._volumes = volumes
-        self._setup_hostnames(nodes=[node])
-        self._setup_etc_hosts(nodes)
-        self._setup_nfs(nodes=[node], start_server=False)
-        self._create_user(node)
-        self._setup_scratch(nodes=[node])
-        self._setup_passwordless_ssh(nodes=[node])
+        # thread management here also?
+        try:
+            self._nodes = nodes
+            self._master = master
+            self._user = user
+            self._user_shell = user_shell
+            self._volumes = volumes
+            self._setup_hostnames(nodes=[node])
+            self._setup_etc_hosts(nodes)
+            self._setup_nfs(nodes=[node], start_server=False)
+            self._create_user(node)
+            self._setup_scratch(nodes=[node])
+            self._setup_passwordless_ssh(nodes=[node])
+        finally:
+            self.pool.shutdown()

@@ -23,6 +23,13 @@ from starcluster.utils import print_timing
 from starcluster.templates import user_msgs
 from starcluster.logger import log
 
+# for thread cleanup
+#_active_pools = []
+#def _join_lingering_threads():
+#    for pool in _active_pools:
+#        del pool
+#import atexit
+#atexit.register(_join_lingering_pools)
 
 class ClusterManager(managers.Manager):
     """
@@ -650,9 +657,14 @@ class Cluster(object):
 
     @property
     def nodes(self):
+        # TODO:  problem here is that it interrogates all nodes in the
+        # TODO:  security group, not just the starcluster nodes that
+        # TODO:  we're interested in
         states = ['pending', 'running', 'stopping', 'stopped']
         filters = {'group-name': self._security_group,
-                   'instance-state-name': states}
+                   'instance-state-name': states,
+                   'tag:starcluster': 'starcluster',
+                   }
         nodes = self.ec2.get_all_instances(filters=filters)
         # remove any cached nodes not in the current node list from EC2
         current_ids = [n.id for n in nodes]
@@ -769,7 +781,16 @@ class Cluster(object):
         else:
             resvs.append(self.ec2.request_instances(image_id, **kwargs))
         for resv in resvs:
+            # TODO: add a starcluster tag to enable filtering out of non-starcluster instances
+            # TODO: risk of failure here is that the node will not have the tag only manual recovery will be possible
+            for inst in resv.instances:
+                inst.add_tag('starcluster', 'starcluster')
             log.info(str(resv), extra=dict(__raw__=True))
+
+        # TODO: does this help ensure any problems with startup... maybe we should interrogate the instances
+        # TODO: until the tag is present?
+        time.sleep(10)
+
         return resvs
 
     def _get_next_node_num(self):
@@ -808,6 +829,10 @@ class Cluster(object):
         aliases - list of aliases to assign to new nodes (len must equal
         num_nodes)
         """
+
+        #TODO: This procedure is not robust to failure of any of its component steps
+        #TODO: Need to check Exception handling
+
         running_pending = self._nodes_in_states(['pending', 'running'])
         aliases = aliases or []
         if not aliases:
@@ -855,6 +880,9 @@ class Cluster(object):
         """
         Remove a list of nodes from this cluster
         """
+
+        #TODO: This procedure is not robust to failure of any of its component steps
+
         default_plugin = clustersetup.DefaultClusterSetup(self.disable_threads)
         if not self.disable_queue:
             sge_plugin = sge.SGEPlugin(disable_threads=self.disable_threads)
@@ -1191,6 +1219,7 @@ class Cluster(object):
         Wait until all cluster nodes are in a 'running' state
         """
         log.info("Waiting for all nodes to be in a 'running' state...")
+
         nodes = nodes or self.get_nodes_or_raise()
         pbar = self.progress_bar.reset()
         pbar.maxval = len(nodes)

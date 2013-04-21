@@ -122,6 +122,7 @@ class Node(object):
             if not name:
                 self.add_tag('Name', alias)
             self._alias = alias
+
         return self._alias
 
     def _remove_all_tags(self):

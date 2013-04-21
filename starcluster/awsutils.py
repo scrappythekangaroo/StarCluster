@@ -463,6 +463,7 @@ class EasyEC2(EasyAWS):
                 # set group info
                 i.groups = res.groups
             instances.extend(insts)
+        log.debug("instances: %s" % instances)
         return instances
 
     def get_instance(self, instance_id):
