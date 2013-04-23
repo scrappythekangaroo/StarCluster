@@ -676,8 +676,12 @@ class Cluster(object):
     @property
     def nodes(self):
         states = ['pending', 'running', 'stopping', 'stopped']
+        # TODO:  problem here is that it interrogates all nodes in the
+        # TODO:  security group, not just the starcluster nodes that
+        # TODO:  we're interested in
         filters = {'group-name': self._security_group,
-                   'instance-state-name': states}
+                   'instance-state-name': states,
+                   'tag:starcluster': 'starcluster',}
         nodes = self.ec2.get_all_instances(filters=filters)
         # remove any cached nodes not in the current node list from EC2
         current_ids = [n.id for n in nodes]
@@ -822,7 +826,14 @@ class Cluster(object):
         else:
             resvs.append(self.ec2.request_instances(image_id, **kwargs))
         for resv in resvs:
+            for inst in resv.instances:
+                inst.add_tag('starcluster', 'starcluster')
             log.info(str(resv), extra=dict(__raw__=True))
+
+        # TODO: does this help ensure any problems with startup... maybe we should interrogate the instances
+        # TODO: until the tag is present?
+        time.sleep(10)
+
         return resvs
 
     def _get_next_node_num(self):
