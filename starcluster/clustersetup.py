@@ -343,6 +343,20 @@ class DefaultClusterSetup(ClusterSetup):
                                  jobid=node.alias)
         self.pool.wait(numtasks=len(nodes))
 
+    def _unmount_nfs_shares(self, nodes, export_paths=None):
+        """
+        Setup /etc/fstab and mount each nfs share listed in export_paths on
+        each node in nodes list
+        """
+        log.info("Unmounting all NFS export path(s) on %d worker node(s)" %
+                 len(nodes))
+        export_paths = export_paths or self._get_nfs_export_paths()
+        for node in nodes:
+            self.pool.simple_job(node.unmount_nfs_shares,
+                (self._master, export_paths),
+                jobid=node.alias)
+        self.pool.wait(numtasks=len(nodes))
+
     @print_timing("Setting up NFS")
     def _setup_nfs(self, nodes=None, start_server=True, export_paths=None):
         """
@@ -386,7 +400,9 @@ class DefaultClusterSetup(ClusterSetup):
         master.remove_from_etc_hosts([node])
         master.copy_remote_file_to_nodes('/etc/hosts', nodes)
 
-    def _remove_nfs_exports(self, node):
+    def _remove_nfs_exports(self, node, unmount_export_paths = True, export_paths=None):
+        if unmount_export_paths is True:
+            self._unmount_nfs_shares([node], export_paths)
         self._master.stop_exporting_fs_to_nodes([node])
 
     def _remove_from_known_hosts(self, node):
@@ -419,7 +435,7 @@ class DefaultClusterSetup(ClusterSetup):
         log.info("Removing %s from /etc/hosts" % node.alias)
         self._remove_from_etc_hosts(node)
         log.info("Removing %s from NFS" % node.alias)
-        self._remove_nfs_exports(node)
+        self._remove_nfs_exports(node, unmount_export_paths=False)
 
     def _create_user(self, node):
         user = self._master.getpwnam(self._user)
