@@ -23,6 +23,9 @@ class SGEStats(object):
     """
     SunGridEngine stats parser
     """
+    _default_fields = ["JB_job_number", "state", "JB_submission_time",
+                       "queue_name", "slots", "tasks", "JAT_start_time"]
+
     def __init__(self):
         self.jobstat_cachesize = 200
         self.hosts = []
@@ -89,12 +92,14 @@ class SGEStats(object):
                 self.jobs.extend(self._parse_job(job, queue_name=name))
         for job in doc.getElementsByTagName("job_list"):
             # vanilla_improvements : put current jobs in empty indexes
-            qname = job.getAttribute("queue_name")
-            hash = dict(job_state=jstate, queue_name=qname)
-            for tag in fields:
+            hash = dict(job_state=job.getAttribute("state"),
+                        queue_name=job.getAttribute("queue_name"))
+            for tag in self._default_fields:
                 es = job.getElementsByTagName(tag)
                 for node in es:
                     for node2 in node.childNodes:
+                        if node2.nodeType == xml.dom.minidom.Node.TEXT_NODE:
+                            hash[tag] = node2.data
                         if tag == "JB_submission_time":
                             jobstats_index = int(hash["JB_job_number"]) % \
                                 self.jobstat_cachesize
