@@ -258,7 +258,7 @@ class SGEStats(object):
                 slots += self.queues.get(q).get('slots')
         return slots
 
-    def slots_per_host(self):
+    def slots_per_host(self, ignore_master):
         """
         Returns the number of slots per host. If for some reason the cluster is
         inconsistent, this will return -1 for example, if you have m1.large and
@@ -269,7 +269,8 @@ class SGEStats(object):
             return total
         single = 0
         for q in self.queues:
-            if q.startswith('all.q@'):
+            if q.startswith('all.q@') and \
+                    (not ignore_master or q != 'all.q@master'):
                 single = self.queues.get(q).get('slots')
                 break
         if (total != (single * len(self.hosts))):
@@ -584,6 +585,7 @@ class SGELoadBalancer(LoadBalancer):
                 log.info("No jobs have completed yet!")
                 qacct = ''
         stats = SGEStats()
+        stats.remote_time = now
         stats.parse_qhost(qhostxml, self.ignore_master)
         stats.parse_qstat(qstatxml)
         stats.parse_qacct(qacct, now)
@@ -731,7 +733,7 @@ class SGELoadBalancer(LoadBalancer):
         need_to_add = 0
         queued_jobs = self.stat.get_queued_jobs()
         qlen = sum([int(j['slots']) for j in queued_jobs])
-        sph = self.stat.slots_per_host()
+        sph = self.stat.slots_per_host(self.ignore_master)
         ts = self.stat.count_total_slots()
         num_exec_hosts = len(self.stat.hosts)
         #calculate estimated time to completion
