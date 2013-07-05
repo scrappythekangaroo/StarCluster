@@ -23,9 +23,6 @@ class SGEStats(object):
     """
     SunGridEngine stats parser
     """
-    _default_fields = ["JB_job_number", "state", "JB_submission_time",
-                       "queue_name", "slots", "tasks", "JAT_start_time"]
-
     def __init__(self):
         self.jobstat_cachesize = 200
         self.hosts = []
@@ -44,8 +41,7 @@ class SGEStats(object):
         if self.jobs:
             return int(self.jobs[-1]['JB_job_number'])
 
-    def parse_qhost(self, qhost_out, ignore_master=False,
-                    additional_config={}):
+    def parse_qhost(self, qhost_out, additional_config={}):
         """
         this function parses qhost -xml output and makes a neat array
         takes in a string, so we can pipe in output from ssh.exec('qhost -xml')
@@ -54,8 +50,6 @@ class SGEStats(object):
         doc = xml.dom.minidom.parseString(qhost_out)
         for h in doc.getElementsByTagName("host"):
             name = h.getAttribute("name")
-            if ignore_master and name == "master":
-                continue
             hash = {"name": name}
             for stat in h.getElementsByTagName("hostvalue"):
                 for hvalue in stat.childNodes:
@@ -91,41 +85,6 @@ class SGEStats(object):
             for job in q.getElementsByTagName("job_list"):
                 self.jobs.extend(self._parse_job(job, queue_name=name))
         for job in doc.getElementsByTagName("job_list"):
-            # vanilla_improvements : put current jobs in empty indexes
-            hash = dict(job_state=job.getAttribute("state"),
-                        queue_name=job.getAttribute("queue_name"))
-            for tag in self._default_fields:
-                es = job.getElementsByTagName(tag)
-                for node in es:
-                    for node2 in node.childNodes:
-                        if node2.nodeType == xml.dom.minidom.Node.TEXT_NODE:
-                            hash[tag] = node2.data
-                        if tag == "JB_submission_time":
-                            jobstats_index = int(hash["JB_job_number"]) % \
-                                self.jobstat_cachesize
-                            if not self.jobstats[jobstats_index]:
-
-                                self.jobstats[jobstats_index] = {
-                                    "queued":
-                                    self.qstat_to_datetime(node2.data),
-                                    "start": None,
-                                    "end":   None
-                                }
-                        elif tag == "JAT_start_time":
-                            jobstats_index = int(hash["JB_job_number"]) % \
-                                self.jobstat_cachesize
-                            if not self.jobstats[jobstats_index]:
-                                self.jobstats[jobstats_index] = {
-                                    "queued": None,
-                                    "start":
-                                    self.qstat_to_datetime(node2.data),
-                                    "end":    None
-                                }
-                            elif self.jobstats[jobstats_index]["start"] \
-                                    is None:
-                                self.jobstats[jobstats_index]["start"] = \
-                                    self.qstat_to_datetime(node2.data)
-
             if job.parentNode.nodeName == 'job_info':
                 self.jobs.extend(self._parse_job(job))
         return self.jobs
@@ -146,19 +105,19 @@ class SGEStats(object):
         This function returns the number of tasks in a task array job. For
         example, 'qsub -t 1-20:1' returns 20.
         """
-        tasks = jdict.get('tasks', '')
-        if ',' in tasks:
-            num_tasks = len(tasks.split(','))
-        elif '-' in tasks:
-            regex = "(\d+)-?(\d+)?:?(\d+)?"
-            r = re.compile(regex)
-            start, end, step = r.match(tasks).groups()
-            start = int(start)
-            end = int(end)
-            step = int(step) if step else 1
-            num_tasks = (end - start) / step + 1
-        else:
-            num_tasks = 1
+        tasks = jdict.get('tasks', '').split(',')
+        num_tasks = 0
+        for task in tasks:
+            if '-' in task:
+                regex = "(\d+)-?(\d+)?:?(\d+)?"
+                r = re.compile(regex)
+                start, end, step = r.match(task).groups()
+                start = int(start)
+                end = int(end)
+                step = int(step) if step else 1
+                num_tasks += (end - start) / step + 1
+            else:
+                num_tasks += 1
         log.debug("task array job has %s tasks (tasks: %s)" %
                   (num_tasks, tasks))
         return num_tasks
@@ -351,16 +310,6 @@ class SGEStats(object):
         else:
             return total_seconds / count
 
-    def on_first_job(self):
-        """
-        returns true if the cluster is processing the first job,
-        False otherwise
-        """
-        if len(self.jobs) > 0 and self.jobs[0]['JB_job_number'] != u'1':
-            log.info("ON THE FIRST JOB")
-            return True
-        return False
-
     def get_loads(self):
         """
         returns an array containing the loads on each host in cluster
@@ -468,16 +417,16 @@ class SGELoadBalancer(LoadBalancer):
                  min_nodes=1, kill_cluster=False, plot_stats=False,
                  plot_output_dir=None, dump_stats=False, stats_file=None,
                  reboot_interval=10, n_reboot_restart=False,
-                 ignore_master=False, ignore_grp=False):
+                 ignore_grp=False):
         self._cluster = None
         self._keep_polling = True
         self._visualizer = None
         self.__last_cluster_mod_time = datetime.datetime.utcnow()
         self.stat = SGEStats()
-        self.polling_interval = min(interval, 300)
+        self.polling_interval = interval
         self.kill_after = kill_after
         self.max_nodes = max_nodes
-        self.longest_allowed_queue_time = max(300, wait_time)
+        self.longest_allowed_queue_time = wait_time
         self.add_nodes_per_iteration = add_pi
         self.stabilization_time = stab
         self.lookback_window = lookback_win
@@ -487,7 +436,6 @@ class SGELoadBalancer(LoadBalancer):
         self.stats_file = stats_file
         self.plot_stats = plot_stats
         self.plot_output_dir = plot_output_dir
-        self.ignore_master = ignore_master
         if plot_stats:
             assert self.visualizer is not None
         if ignore_grp:
@@ -586,7 +534,7 @@ class SGELoadBalancer(LoadBalancer):
                 qacct = ''
         stats = SGEStats()
         stats.remote_time = now
-        stats.parse_qhost(qhostxml, self.ignore_master)
+        stats.parse_qhost(qhostxml)
         stats.parse_qstat(qstatxml)
         stats.parse_qacct(qacct, now)
         log.debug("sizes: qhost: %d, qstat: %d, qacct: %d" %
@@ -721,50 +669,48 @@ class SGELoadBalancer(LoadBalancer):
 
     def _eval_add_node(self):
         """
-        This function uses the metrics available to it to decide whether to
-        add a new node to the cluster or not. It isn't able to add a node yet.
-        TODO: See if the recent jobs have taken more than 5 minutes (how
-        long it takes to start an instance)
+        This function inspects the current state of the SGE queue and decides
+        whether or not to add nodes to the cluster. Returns the number of nodes
+        to add.
         """
-        if len(self.stat.hosts) >= self.max_nodes:
+        if len(self._cluster.running_nodes) >= self.max_nodes:
             log.info("Not adding nodes: already at or above maximum (%d)" %
                      self.max_nodes)
             return
-        need_to_add = 0
         queued_jobs = self.stat.get_queued_jobs()
-        qlen = sum([int(j['slots']) for j in queued_jobs])
-        sph = self.stat.slots_per_host(self.ignore_master)
-        ts = self.stat.count_total_slots()
-        num_exec_hosts = len(self.stat.hosts)
-        #calculate estimated time to completion
-        ettc = 0
-        if num_exec_hosts > 0:
-            #calculate job duration
-            avg_duration = self.stat.avg_job_duration()
-            ettc = avg_duration * len(queued_jobs) / num_exec_hosts
-        if qlen > 0 and ts == 0:
-            #no slots! add one now.
+        if not queued_jobs:
+            log.info("Not adding nodes: no queued jobs...")
+            return
+        if not self.has_cluster_stabilized():
+            return
+        running_jobs = self.stat.get_running_jobs()
+        used_slots = sum([int(j['slots']) for j in running_jobs])
+        qw_slots = sum([int(j['slots']) for j in queued_jobs])
+        slots_per_host = self.stat.slots_per_host()
+        total_slots = self.stat.count_total_slots()
+        avail_slots = total_slots - used_slots
+        need_to_add = 0
+        if total_slots == 0 and qw_slots > 0:
+            #no slots, add one now
             need_to_add = 1
-        elif qlen > ts:
-            if not self.has_cluster_stabilized():
-                return
-            #there are more jobs queued than will be consumed with one
-            #cycle of job processing from all nodes
+        elif qw_slots > avail_slots:
+            log.info("Queued jobs need more slots (%d) than available (%d)" %
+                     (qw_slots, avail_slots))
             oldest_job_dt = self.stat.oldest_queued_job_age()
             now = self.get_remote_time()
             age_delta = now - oldest_job_dt
             if age_delta.seconds > self.longest_allowed_queue_time:
-                log.info("A job has been waiting for %d sec, longer than "
-                         "max %d" % (age_delta.seconds,
-                                     self.longest_allowed_queue_time))
-                need_to_add = qlen / sph if sph != 0 else 1
-                if 0 < ettc < 600 and not self.stat.on_first_job():
-                    log.warn("There is a possibility that the job queue is"
-                             " shorter than 10 minutes in duration")
+                log.info("A job has been waiting for %d seconds "
+                         "longer than max: %d" %
+                         (age_delta.seconds, self.longest_allowed_queue_time))
+                if slots_per_host != 0:
+                    need_to_add = qw_slots / slots_per_host
+                else:
+                    need_to_add = 1
+            else:
+                log.info("No queued jobs older than %d seconds" %
+                         self.longest_allowed_queue_time)
         running_nodes = len(self._cluster.running_nodes)
-        if self.ignore_master:
-            running_nodes -= 1
-        max_add = self.max_nodes - running_nodes
         need_to_add = min(self.add_nodes_per_iteration, need_to_add, max_add)
         if need_to_add > 0:
             log.warn("Adding %d nodes at %s" %
