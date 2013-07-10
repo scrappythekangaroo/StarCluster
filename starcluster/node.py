@@ -311,7 +311,31 @@ class Node(object):
 
     @property
     def root_device_name(self):
-        return self.instance.root_device_name
+        root_dev = self.instance.root_device_name
+        bmap = self.block_device_mapping
+        if bmap and root_dev not in bmap and self.is_ebs_backed():
+            # Hack for misconfigured AMIs (e.g. CentOS 6.3 Marketplace) These
+            # AMIs have root device name set to /dev/sda1 but no /dev/sda1 in
+            # block device map - only /dev/sda. These AMIs somehow magically
+            # work so check if /dev/sda exists and return that instead to
+            # prevent detach_external_volumes() from trying to detach the root
+            # volume on these AMIs.
+            log.warn("Root device %s is not in the block device map" %
+                     root_dev)
+            log.warn("This means the AMI was registered with either "
+                     "an incorrect root device name or an incorrect block "
+                     "device mapping")
+            sda, sda1 = '/dev/sda', '/dev/sda1'
+            if root_dev == sda1:
+                log.info("Searching for possible root device: %s" % sda)
+                if sda in self.block_device_mapping:
+                    log.warn("Found '%s' - assuming its the real root device" %
+                             sda)
+                    root_dev = sda
+                else:
+                    log.warn("Device %s isn't in the block device map either" %
+                             sda)
+        return root_dev
 
     @property
     def root_device_type(self):
@@ -728,47 +752,32 @@ class Node(object):
     def get_device_map(self):
         """
         Returns a dictionary mapping devices->(# of blocks) based on
-        /proc/partitions
+        'fdisk -l' and /proc/partitions
         """
-        parts = self.ssh.remote_file('/proc/partitions', 'r').read()
-        dev_regex = '(?:xv|s)d[a-z]'
-        part_regex = '\d+(?:p\d+)?'
-        r = re.compile('(\d+)\s+(%s)(%s)?(?:\s+|\\n)' %
-                       (dev_regex, part_regex))
-        entries = r.findall(parts)
+        dev_regex = '/dev/[A-Za-z0-9/]+'
+        r = re.compile('Disk (%s):' % dev_regex)
+        fdiskout = '\n'.join(self.ssh.execute("fdisk -l 2>/dev/null"))
+        proc_parts = '\n'.join(self.ssh.execute("cat /proc/partitions"))
         devmap = {}
-        partmap = {}
-        for blocks, root_dev_name, partition in entries:
-            root_dev_file = '/dev/' + root_dev_name
-            devfile = root_dev_file + partition
-            if self.ssh.path_exists(devfile):
-                blocks = int(blocks)
-                if partition:
-                    partmap[devfile] = (root_dev_file, blocks)
-                else:
-                    devmap[devfile] = blocks
-        # check for devices attached to the instance with a partition's naming
-        # scheme (e.g. /dev/xvdb1)
-        for dev in partmap:
-            root_dev_file, blocks = partmap[dev]
-            # if a device exists with a partition naming scheme, then the root
-            # device name, e.g. /dev/xvdb for /dev/xvdb1, will not exist
-            if not root_dev_file in devmap:
-                devmap[dev] = blocks
+        for dev in r.findall(fdiskout):
+            short_name = dev.replace('/dev/', '')
+            r = re.compile("(\d+)\s+%s(?:\s+|$)" % short_name)
+            devmap[dev] = int(r.findall(proc_parts)[0])
         return devmap
 
-    def get_partition_map(self):
+    def get_partition_map(self, device=None):
         """
         Returns a dictionary mapping partitions->(start, end, blocks, id) based
         on 'fdisk -l'
         """
-        fdiskout = '\n'.join(self.ssh.execute("fdisk -l 2>/dev/null"))
-        part_regex = '/dev/(?:xv|s)d[a-z]\d+(?:p\d+)?'
-        r = re.compile('(%s)\s+'
+        fdiskout = '\n'.join(self.ssh.execute("fdisk -l %s 2>/dev/null" %
+                                              (device or '')))
+        part_regex = '/dev/[A-Za-z0-9/]+'
+        r = re.compile('(%s)\s+\*?\s+'
                        '(\d+)(?:[-+])?\s+'
                        '(\d+)(?:[-+])?\s+'
                        '(\d+)(?:[-+])?\s+'
-                       '(\d+)(?:[-+])?' % part_regex)
+                       '([\da-fA-F][\da-fA-F]?)' % part_regex)
         partmap = {}
         for match in r.findall(fdiskout):
             part, start, end, blocks, sys_id = match
@@ -847,8 +856,9 @@ class Node(object):
         attached_vols.update(self.block_device_mapping)
         if self.is_ebs_backed():
             # exclude the root device from the list
-            if self.root_device_name in attached_vols:
-                attached_vols.pop(self.root_device_name)
+            root_dev = self.root_device_name
+            if root_dev in attached_vols:
+                attached_vols.pop(root_dev)
         return attached_vols
 
     def detach_external_volumes(self):
