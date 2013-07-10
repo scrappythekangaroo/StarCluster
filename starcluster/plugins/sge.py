@@ -59,26 +59,21 @@ class SGEPlugin(clustersetup.DefaultClusterSetup):
         queue - configure queue to use the new parallel environment
         """
         mssh = self._master.ssh
-        pe_exists = mssh.get_status('qconf -sp %s' % name)
-        pe_exists = pe_exists == 0
-        verb = 'Updating'
-        if not pe_exists:
-            verb = 'Creating'
+        pe_exists = mssh.get_status('qconf -sp %s' % name) == 0
+        verb = 'Updating' if pe_exists else 'Creating'
         log.info("%s SGE parallel environment '%s'" % (verb, name))
         # iterate through each machine and count the number of processors
         nodes = nodes or self._nodes
-        #TODO: Fails if some machines go away while updating
-        num_processors = sum(self.pool.map(
-            lambda n: n.num_processors, 
-            nodes,
-            jobid_fn=lambda n: n.alias))
-        penv = mssh.remote_file("/tmp/pe.txt", "w")
-        penv.write(sge.sge_pe_template % (name, num_processors))
-        penv.close()
+        num_processors = sum(self.pool.map(lambda n: n.num_processors, nodes,
+                                           jobid_fn=lambda n: n.alias))
         if not pe_exists:
+            penv = mssh.remote_file("/tmp/pe.txt", "w")
+            penv.write(sge.sge_pe_template % (name, num_processors))
+            penv.close()
             mssh.execute("qconf -Ap %s" % penv.name)
         else:
-            mssh.execute("qconf -Mp %s" % penv.name)
+            mssh.execute("qconf -mattr pe slots %s %s" %
+                         (num_processors, name))
         if queue:
             log.info("Adding parallel environment '%s' to queue '%s'" %
                      (name, queue))
@@ -286,7 +281,10 @@ report_variables      NONE
             aliases.append(line[0:line.find(" ")])
         for node in nodes:
             if node.alias not in aliases:
-                missing.append(node)
+                if node.alias == "master":
+                    assert(not self.master_is_exec_host)
+                else:
+                    missing.append(node)
 
         return missing
 
@@ -373,6 +371,12 @@ report_variables      NONE
         #delete the host config
         for c in cleaned:
             log.info("Cleaning node " + c)
+            if len(master.ssh.get_remote_file_lines("/etc/hosts", c)) == 0:
+                log.warn(c + " is missing from /etc/hosts, creating a dummy "
+                         "entry 1.1.1.1")
+                rfile = master.ssh.remote_file("/etc/hosts", 'a')
+                rfile.write("1.1.1.1 " + c)
+                rfile.close()
             self._remove_from_sge(DeadNode(c), only_clean_master=True)
 
         #fix to allow pickling
