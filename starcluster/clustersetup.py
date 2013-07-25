@@ -186,7 +186,7 @@ class DefaultClusterSetup(ClusterSetup):
             user_scratch = '/mnt/%s' % user
             if not nconn.path_exists(user_scratch):
                 nconn.mkdir(user_scratch)
-            nconn.execute('chown -R %(user)s:%(user)s /mnt/%(user)s' %
+                nconn.execute('chown -R %(user)s:%(user)s /mnt/%(user)s' %
                           {'user': user})
             scratch = '/scratch'
             if not nconn.path_exists(scratch):
