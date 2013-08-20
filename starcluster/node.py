@@ -469,15 +469,15 @@ class Node(object):
         """
         user = self.getpwnam(username)
         known_hosts_file = posixpath.join(user.pw_dir, '.ssh', 'known_hosts')
-        self.remove_from_known_hosts(username, nodes)
         khosts = []
         if add_self and self not in nodes:
             nodes.append(self)
+        self.remove_from_known_hosts(username, nodes)
         for node in nodes:
             server_pkey = node.ssh.get_server_public_key()
             node_names = {}.fromkeys([node.alias, node.private_dns_name,
-                                       node.private_dns_name_short],
-                                      node.private_ip_address)
+                                      node.private_dns_name_short],
+                                     node.private_ip_address)
             node_names[node.public_dns_name] = node.ip_address
             for name, ip in node_names.items():
                 name_ip = "%s,%s" % (name, ip)
