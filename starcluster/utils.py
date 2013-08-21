@@ -17,6 +17,7 @@ from datetime import datetime
 from starcluster import iptools
 from starcluster import exception
 from starcluster.logger import log
+from starcluster import spinner
 
 try:
     import IPython
@@ -545,3 +546,20 @@ class struct_passwd(tuple):
             return self[self.attrs.index(attr)]
         except ValueError:
             raise AttributeError
+
+
+def get_spinner(msg):
+    """
+    Logs a status msg, starts a spinner, and returns the spinner object.
+    This is useful for long running processes:
+
+    s = get_spinner("Long running process running...")
+    try:
+        (do something)
+    finally:
+        s.stop()
+    """
+    s = spinner.Spinner()
+    log.info(msg, extra=dict(__nonewline__=True))
+    s.start()
+    return s
