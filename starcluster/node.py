@@ -576,7 +576,7 @@ class Node(object):
         # setup /etc/exports
         log.info("Configuring NFS exports path(s):\n%s" %
                  ' '.join(export_paths))
-        nfs_export_settings = "(async,no_root_squash,no_subtree_check,rw)"
+        nfs_export_settings = "(sync,no_root_squash,no_subtree_check,rw)"
         etc_exports = self.ssh.remote_file('/etc/exports', 'r')
         contents = etc_exports.read()
         etc_exports.close()
@@ -639,7 +639,7 @@ class Node(object):
         self.ssh.remove_lines_from_file('/etc/fstab', remote_paths_regex)
         fstab = self.ssh.remote_file('/etc/fstab', 'a')
         for path in remote_paths:
-            fstab.write('%s:%s %s nfs vers=3,user,rw,exec,noauto 0 0\n' %
+            fstab.write('%s:%s %s nfs vers=3,user,rw,exec,noauto,lookupcache=pos 0 0\n' %
                         (server_node.alias, path, path))
         fstab.close()
         for path in remote_paths:
