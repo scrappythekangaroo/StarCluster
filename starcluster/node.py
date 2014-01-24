@@ -576,7 +576,8 @@ class Node(object):
         # setup /etc/exports
         log.info("Configuring NFS exports path(s):\n%s" %
                  ' '.join(export_paths))
-        nfs_export_settings = "(sync,no_root_squash,no_subtree_check,rw)"
+        # TODO: check that this is the ideal configuration setting for NFS
+        nfs_export_settings = "(async,no_root_squash,no_subtree_check,rw)"
         etc_exports = self.ssh.remote_file('/etc/exports', 'r')
         contents = etc_exports.read()
         etc_exports.close()
@@ -641,12 +642,12 @@ class Node(object):
         for path in remote_paths:
             # treat home differently to optimise metadata read performance
             # WARNING!!!: writing to home from nodes is not advisable with these settings
-            if path == '/home':
-                fstab.write('%s:%s %s nfs vers=3,user,rw,exec,noauto,lookupcache=all,fsc 0 0\n' %
-                            (server_node.alias, path, path))
-            else:
-                fstab.write('%s:%s %s nfs vers=3,user,rw,exec,noauto,lookupcache=pos 0 0\n' %
-                            (server_node.alias, path, path))
+            #if path == '/home':
+            #    fstab.write('%s:%s %s nfs vers=3,user,rw,exec,noauto,fsc 0 0\n' %
+            #                (server_node.alias, path, path))
+            #else:
+            fstab.write('%s:%s %s nfs vers=3,user,rw,exec,noauto 0 0\n' %
+                        (server_node.alias, path, path))
         fstab.close()
         for path in remote_paths:
             if not self.ssh.path_exists(path):
@@ -679,11 +680,23 @@ class Node(object):
         """
         Adds all names for node in nodes arg to this node's /etc/hosts file
         """
+        # TODO: sometimes it seems that during host file modification the host file become unreadable / empty and
+        # TODO: any ongoing processing can be interrupted.  A correct fix for this would be to use an LDAP server
+        # TODO: for looking up hosts
+
         self.remove_from_etc_hosts(nodes)
-        host_file = self.ssh.remote_file('/etc/hosts', 'a')
+
+        self.ssh.execute('cp %s %s' % ('/etc/hosts', '/etc/hosts.tmp'))
+        host_file = self.ssh.remote_file('/etc/hosts.tmp', 'a')
         for node in nodes:
             print >> host_file, node.get_hosts_entry()
         host_file.close()
+        self.ssh.execute('cp %s %s' % ('/etc/hosts.tmp', '/etc/hosts'))
+
+        #host_file = self.ssh.remote_file('/etc/hosts', 'a')
+        #for node in nodes:
+        #    print >> host_file, node.get_hosts_entry()
+        #host_file.close()
 
     def remove_from_etc_hosts(self, nodes):
         """
@@ -691,7 +704,11 @@ class Node(object):
         /etc/hosts file
         """
         aliases = map(lambda x: x.alias, nodes)
-        self.ssh.remove_lines_from_file('/etc/hosts', '|'.join(aliases))
+        #self.ssh.remove_lines_from_file('/etc/hosts', '|'.join(aliases))
+
+        self.ssh.execute('cp %s %s' % ('/etc/hosts', '/etc/hosts.tmp'))
+        self.ssh.remove_lines_from_file('/etc/hosts.tmp', '|'.join(aliases))
+        self.ssh.execute('cp %s %s' % ('/etc/hosts.tmp', '/etc/hosts'))
 
     def set_hostname(self, hostname=None):
         """
